@@ -7,12 +7,14 @@ use std::{
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use comrak::Options;
+use tracing::debug;
 use walkdir::WalkDir;
 
 #[derive(Debug, Parser)]
 struct Args {
     #[command(subcommand)]
     command: Commands,
+    // TODO: maybe add log_level in here
 }
 
 #[derive(Debug, Subcommand)]
@@ -23,25 +25,39 @@ enum Commands {
     Generate {
         input_path: PathBuf,
         output_path: PathBuf,
+        template_path: PathBuf,
     },
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    tracing_subscriber::fmt()
+        .with_env_filter("debug")
+        .with_ansi(false)
+        .init();
+
     match args.command {
         Commands::Serve { content_path } => todo!("not implemented yet"),
         Commands::Generate {
             input_path,
             output_path,
-        } => generate_site(&input_path, &output_path).context("Error generating site")?,
+            template_path,
+        } => {
+            debug!(
+                "Command::Generate({:?}, {:?}, {:?})",
+                &input_path, &output_path, &template_path
+            );
+            generate_site(&input_path, &output_path, &template_path)
+                .context("Error generating site")?
+        }
     }
 
     Ok(())
 }
 
 // TODO!!: this was made with ChatGPT; So I want to refactor is later on
-fn generate_site(input_path: &Path, output_path: &Path) -> Result<()> {
+fn generate_site(input_path: &Path, output_path: &Path, template_path: &Path) -> Result<()> {
     // TODO!!: this is not that great I think
     if output_path.exists() {
         remove_dir_all(output_path).context("Failed to delete output directory")?;
@@ -52,6 +68,7 @@ fn generate_site(input_path: &Path, output_path: &Path) -> Result<()> {
     // Traverse through the input directory
     for entry in WalkDir::new(input_path) {
         let entry = entry.context("Error reading directory entry")?;
+        debug!(?entry);
         let full_path = entry.path();
 
         // Compute relative path with respect to the input_path (e.g., "content/")
@@ -83,8 +100,8 @@ fn generate_site(input_path: &Path, output_path: &Path) -> Result<()> {
                         .context("Failed to create parent directory for HTML file")?;
                 }
 
-                let html =
-                    convert_md_to_html(full_path).context("Failed to convert markdown to HTML")?;
+                let html = convert_md_to_html(full_path, template_path)
+                    .context("Failed to convert markdown to HTML")?;
                 write_to_file(&output_file_path, html).context("Failed to write HTML to file")?;
             } else {
                 // Otherwise, just copy the file (images, CSS, etc.)
@@ -101,10 +118,14 @@ fn generate_site(input_path: &Path, output_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn convert_md_to_html(md_path: &Path) -> Result<String> {
+fn convert_md_to_html(md_path: &Path, template_path: &Path) -> Result<String> {
+    // FIXME!!: add templating
     let md_content = std::fs::read_to_string(md_path).context("Failed to read markdown file")?;
     let html_content = comrak::markdown_to_html(&md_content, &Options::default());
-    Ok(html_content)
+
+    let template = read_to_string(template_path).context("Failed to read template file")?;
+    let full_html = template.replace("__content__", &html_content);
+    Ok(full_html)
 }
 
 fn write_to_file(path: &Path, data: String) -> Result<()> {
